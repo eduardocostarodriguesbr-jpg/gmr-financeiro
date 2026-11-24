@@ -1,0 +1,24 @@
+# Dependências e compilação
+node_modules/
+dist/
+
+# Banco local e arquivos do Cloudflare
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# Variáveis privadas
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Bancos locais
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*

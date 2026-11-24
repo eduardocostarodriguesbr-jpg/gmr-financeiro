@@ -1,0 +1,121 @@
+# GMR Financeiro
+
+Primeiro incremento local do sistema financeiro da igreja, com React, TypeScript, Cloudflare Workers e D1. Revisão de acesso e identidade: cadastro sujeito a aprovação, Master separado e identidade configurável da igreja. O PostgreSQL e o Docker existentes na máquina não são utilizados nem alterados.
+
+## Executar no VS Code
+
+Abra **esta pasta** no VS Code e use seu terminal integrado. Requer Node.js 22 ou superior e npm. Foi verificado com Node.js 24.
+
+```powershell
+npm.cmd install
+npm.cmd run build
+npm.cmd run db:migrate
+npm.cmd run dev
+```
+
+Abra o endereço indicado pelo Vite, normalmente **http://127.0.0.1:5173**. A API local utiliza a porta **8787**. Use `Ctrl+C` para encerrar os dois processos.
+
+As dependências já foram instaladas nesta entrega; `npm.cmd install` é necessário ao copiar o projeto para outro local sem `node_modules`. O `package-lock.json` mantém as versões resolvidas. Para instalação reproduzível em outra máquina, use `npm.cmd ci`.
+
+Para visualizar somente a versão compilada, depois de compilar e aplicar as migrations:
+
+```powershell
+npm.cmd run preview
+```
+
+Nesse caso, abra **http://127.0.0.1:8787**. Os dados persistem localmente em `.wrangler/`. Não apague essa pasta se quiser preservar os registros locais. A prévia visual e os testes desta entrega utilizam bancos isolados fora dessa pasta, sem misturar os exemplos com seus dados.
+
+## Primeiro acesso
+
+**Na pasta original desta entrega, o Master local já foi provisionado.** O login e a senha temporária foram entregues ao proprietário no chat. A senha não está no código, no README ou no ZIP. Sua troca será obrigatória antes de acessar qualquer área do sistema.
+
+1. O proprietário entra com o Master, troca a senha e entra novamente.
+2. A pessoa que será responsável pela igreja abre **Solicitar acesso**, escolhe **Responsável pelo sistema na igreja** e informa nome, login e sua própria senha.
+3. O proprietário acessa **Usuários**, analisa a solicitação e aprova o responsável com um perfil adequado, como **Administrador**.
+4. Os demais usuários solicitam acesso como **Integrante da equipe**. O responsável ou alguém com a permissão **Usuários · Aprovar** escolhe o perfil e autoriza a entrada.
+5. Cadastro pendente ou recusado não permite login. A escolha de responsável no formulário não concede privilégios; só o proprietário autoriza esse papel.
+6. Em **Identidade da igreja**, a pessoa autorizada cadastra nome e logo. Após o login, a identidade da igreja ganha destaque e a GMR aparece como fornecedora em posição secundária.
+
+Os usuários escolhem suas próprias senhas ao solicitar acesso. A troca obrigatória continua aplicável ao Master provisionado e às senhas temporárias redefinidas por um gestor. Ações de aprovação e recusa são auditadas; as operações do Master seguem indisponíveis para consulta na aplicação.
+
+### Nova instalação a partir do ZIP
+
+O ZIP não inclui o banco local nem credenciais. Depois de instalar dependências, compilar e aplicar as migrations, o proprietário executa uma única vez:
+
+```powershell
+npm.cmd run master:provision
+```
+
+O comando gera uma senha temporária aleatória, exibe-a no terminal e grava somente seu hash no banco. Ele não substitui um Master existente e não expõe um cadastro público para criar Master. Cada instalação recebe uma senha diferente.
+
+### Nome e logo da igreja
+
+A identidade da igreja é editável por quem possui **Identidade da igreja · Gerenciar**. São aceitas logos PNG, JPEG ou WebP de até 150 KB e 4096 × 4096 pixels. O nome e a logo permanecem no banco local após reiniciar a aplicação. A imagem GMR fornecida foi incorporada sem alterações em `public/gmr-logo.png`, com tema azul, azul-marinho e detalhes dourados.
+
+## Funcionalidades deste incremento
+
+- Login individual, logout e sessões com expiração de oito horas.
+- Senhas protegidas por PBKDF2, limitação de tentativas e cookies HttpOnly/SameSite; Secure fora de localhost.
+- Troca obrigatória de senha temporária, troca da própria senha e redefinição por usuário autorizado.
+- Senhas de 8 a 128 caracteres, com botão de mostrar/ocultar. Copiar e colar permanecem disponíveis pelo teclado, sem ícones dedicados. Textos, foco e passagem do mouse seguem a paleta azul.
+- O “X” fecha a troca opcional de senha. Na troca obrigatória, fechar encerra a sessão e retorna ao login; a exigência de trocar a senha permanece no próximo acesso.
+- Invalidação de sessões após redefinição, troca de senha ou alteração administrativa do usuário.
+- Perfis configuráveis e autorização por ação no servidor; bloqueio de concessão de permissões não possuídas.
+- Proteção do último administrador ativo.
+- Solicitação pública de acesso sem ativação automática, autorização do responsável pelo proprietário e aprovação dos demais por permissão específica.
+- Cadastro de nome e logo da igreja, exibidos em destaque após o login; identidade GMR na tela inicial.
+- Contas bancárias e dinheiro em espécie; caixas; categorias e subcategorias.
+- Criação, edição e desativação de cadastros; saldos precisam estar zerados para desativar contas e caixas.
+- Usuários e perfis sem exclusão física; perfis com usuários ativos não podem ser desativados.
+- Abertura de saldo em posição não apropriada, com possibilidade de exigir aprovação por outro usuário.
+- Entradas e saídas simples, com valor positivo em centavos, descrição obrigatória, categoria obrigatória e subcategoria opcional.
+- Forma de pagamento nas saídas: dinheiro, Pix, crédito ou débito. Apenas pagamentos já efetivados.
+- Datas retroativas; movimentação separada da data e hora de registro.
+- Prévia do saldo antes de confirmar, aviso para valores negativos e bloqueio de saldo total negativo em espécie.
+- Dashboard de saldos, entradas, saídas e posição não apropriada; detalhamento de caixas por conta.
+- Consulta de movimentações com filtros por data, conta e caixa (até 500 por consulta).
+- Auditoria de ações de usuários comuns (300 registros mais recentes), sem senhas.
+- Gravação conjunta de operação, efeitos e auditoria, com proteções de integridade no banco.
+
+Permissões de consulta dos cadastros devem ser concedidas junto às ações que os utilizam. Exemplo: quem inclui movimentações precisa consultar categorias e subcategorias para selecioná-las. A escolha de perfis para autorizar usuários mostra apenas os perfis cujas permissões o aprovador pode conceder.
+
+Os saldos atuais consideram todo o histórico efetivado. Os filtros do dashboard alteram os indicadores do período e as movimentações; não transformam os saldos atuais em saldos históricos. Aberturas não compõem receitas ou despesas.
+
+## Recorte e próximos incrementos
+
+**Rateio fica para o próximo commit**, conforme combinado. Apropriações, devoluções, transferências, ajustes posteriores à abertura e edição/cancelamento de movimentações ainda não têm fluxo operacional neste incremento. Portanto, uma abertura permanece não apropriada até a entrega da apropriação. O cadastro de categorias e os lançamentos simples já funcionam; a V1 completa ainda não está concluída.
+
+A interface de subcategorias permite criação, edição do nome e desativação/reativação.
+
+Os detalhes destinados à V1.1 e V2 permanecem nessas versões. O cadastro inicial e a política simples de aprovação já permitem testar a abertura; o tratamento completo do ciclo de solicitações e a política específica do Master permanecem na V1.1. Nesta base, quando a política de dupla aprovação está ativa, o endpoint de aprovação sempre rejeita a autoaprovação, sem exceção técnica para o Master.
+
+## Verificação
+
+```powershell
+npm.cmd run check
+npm.cmd run build
+npm.cmd test
+```
+
+Os testes iniciam a API em **8790** e aplicam as migrations em um banco isolado. Validam autenticação, troca de senha, encerramento de sessões, permissões, último administrador, invisibilidade administrativa do Master, sua auditoria indisponível, aprovação independente, lançamentos, abertura única, classificação, datas e integridade do saldo em espécie. Não usam dados reais.
+
+## Organização do código
+
+| Caminho                   | Conteúdo                                      |
+| ------------------------- | --------------------------------------------- |
+| `src/main.tsx`            | Interface e formulários React.                |
+| `src/style.css`           | Estilos e layout responsivo.                  |
+| `worker/index.ts`         | API, sessões, permissões e regras de negócio. |
+| `migrations/`             | Estrutura e proteções do banco D1.            |
+| `scripts/integration.mjs` | Testes com banco e servidor isolados.         |
+| `wrangler.jsonc`          | Configuração local do Cloudflare Workers/D1.  |
+
+## Publicação futura
+
+Não foi criada conta Cloudflare, banco remoto, repositório remoto ou publicação. O identificador D1 em `wrangler.jsonc` é reservado para desenvolvimento local e deve ser substituído pelo identificador real somente na preparação da hospedagem.
+
+Antes de publicar, validar autenticação e tempo de processamento no plano gratuito, provisionamento remoto seguro e comportamento sob uso simultâneo. O teste local não comprova os limites de CPU do plano hospedado. Não enfraquecer o tratamento de senhas para caber na cota gratuita; se necessário, rever a solução de autenticação.
+
+Backup e recuperação continuam destinados à V1.1. Não utilizar esta primeira base como registro financeiro definitivo sem concluir e validar os próximos incrementos e preparar a operação da hospedagem.
+
+Nenhum commit Git foi criado: a pasta inicial não continha repositório. O código está pronto para revisão local e posterior versionamento.

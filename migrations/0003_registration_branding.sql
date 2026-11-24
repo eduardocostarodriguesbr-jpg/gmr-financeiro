@@ -1,0 +1,11 @@
+ALTER TABLE users ADD COLUMN approval_state TEXT NOT NULL DEFAULT 'approved' CHECK(approval_state IN ('pending','approved','rejected'));
+ALTER TABLE users ADD COLUMN requested_role TEXT NOT NULL DEFAULT 'member' CHECK(requested_role IN ('member','responsible'));
+ALTER TABLE users ADD COLUMN is_responsible INTEGER NOT NULL DEFAULT 0 CHECK(is_responsible IN (0,1));
+ALTER TABLE users ADD COLUMN approved_by TEXT REFERENCES users(id);
+ALTER TABLE users ADD COLUMN approved_at TEXT;
+INSERT INTO profiles(id,name,description,active,permissions,created_at) VALUES ('system-pending','Aguardando autorização','Perfil interno sem acesso',0,'[]',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+UPDATE profiles SET permissions=json_insert(permissions,'$[#]','users.approve','$[#]','institution.manage') WHERE id<>'system-pending' AND EXISTS(SELECT 1 FROM json_each(permissions) WHERE value='users.manage') AND EXISTS(SELECT 1 FROM json_each(permissions) WHERE value='profiles.manage');
+UPDATE users SET is_responsible=1 WHERE is_master=0 AND active=1 AND EXISTS(SELECT 1 FROM profiles p WHERE p.id=users.profile_id AND EXISTS(SELECT 1 FROM json_each(p.permissions) WHERE value='users.manage') AND EXISTS(SELECT 1 FROM json_each(p.permissions) WHERE value='profiles.manage'));
+INSERT INTO settings(key,value) VALUES ('church_identity','{"name":"Sua igreja","logo":""}');
+CREATE TRIGGER pending_access_guard BEFORE UPDATE ON users WHEN NEW.is_master=0 AND NEW.active=1 AND NEW.approval_state<>'approved' BEGIN SELECT RAISE(ABORT,'ACCESS_NOT_APPROVED'); END;
+CREATE TRIGGER pending_insert_guard BEFORE INSERT ON users WHEN NEW.is_master=0 AND NEW.active=1 AND NEW.approval_state<>'approved' BEGIN SELECT RAISE(ABORT,'ACCESS_NOT_APPROVED'); END;
