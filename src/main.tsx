@@ -1,3 +1,5 @@
+import { ErrorBoundary, PageContent } from "./ErrorBoundary";
+import { validatePageResponse } from "./pageContracts";
 import { PasswordInput } from "./PasswordInput";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -93,7 +95,7 @@ async function api<T = any>(
   });
   const data: any = await r.json();
   if (!r.ok) throw new Error(data.error ?? "Não foi possível concluir.");
-  return data;
+  return (method === "GET" ? validatePageResponse(path, data) : data) as T;
 }
 function Field({
   label,
@@ -280,6 +282,7 @@ function App() {
       totals: { income: 0, expense: 0 },
     }),
     [loading, setLoading] = useState(false),
+    [loadedKey, setLoadedKey] = useState(""),
     [error, setError] = useState(""),
     [toast, setToast] = useState(""),
     [modal, setModal] = useState<Item | null>(null),
@@ -335,6 +338,7 @@ function App() {
   const qs = new URLSearchParams(
     Object.entries(filters).filter(([, v]) => v),
   ).toString();
+  const requestKey = JSON.stringify([me?.id, page, qs, refresh]);
   useEffect(() => {
     if (!me || me.must_change || page === "none") return;
     let valid = true;
@@ -345,11 +349,11 @@ function App() {
       try {
         if (page === "dashboard") {
           const r = await api("/dashboard?" + qs);
+          const rows = can("movements.view")
+            ? await api("/operations?" + qs) : [];
           if (valid) {
             setBalance(r);
-            setData(
-              can("movements.view") ? await api("/operations?" + qs) : [],
-            );
+            setData(rows);
           }
         } else if (page === "operations") {
           const r = await api("/operations?" + qs);
@@ -374,7 +378,10 @@ function App() {
       } catch (e) {
         if (valid) setError((e as Error).message);
       } finally {
-        if (valid) setLoading(false);
+        if (valid) {
+          setLoadedKey(requestKey);
+          setLoading(false);
+        }
       }
     })();
     return () => {
@@ -643,10 +650,12 @@ function App() {
               )}
             </div>
           </div>
+          <ErrorBoundary key={requestKey} onRetry={() => setRefresh(n => n + 1)}>
+          <PageContent render={() => (<>
           <ErrorMessage error={error} />
-          {loading ? (
+          {loading || loadedKey !== requestKey ? (
             <div className="loading">Carregando informações…</div>
-          ) : (
+          ) : error ? null : (
             <>
               {page === "dashboard" && (
                 <>
@@ -1106,6 +1115,8 @@ function App() {
               )}
             </>
           )}
+          </>)} />
+          </ErrorBoundary>
         </main>
         <footer className="main-footer">
           <span>{identity.name} · Controle financeiro</span>
@@ -2267,6 +2278,6 @@ function SettingsForm({
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary onRetry={() => window.location.reload()}><App /></ErrorBoundary>
   </React.StrictMode>,
 );

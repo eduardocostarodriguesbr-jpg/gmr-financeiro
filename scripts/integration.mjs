@@ -1,3 +1,4 @@
+import { validatePageResponse } from "../src/pageContracts.ts";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -65,6 +66,7 @@ async function request(
     expected,
     `${method} ${path}: ${JSON.stringify(data)}`,
   );
+  if (method === "GET" && r.ok) validatePageResponse(path, data);
   checks++;
   return { data, cookie: r.headers.get("set-cookie")?.split(";")[0] };
 }

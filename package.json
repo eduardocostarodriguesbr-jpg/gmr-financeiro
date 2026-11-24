@@ -8,9 +8,10 @@
     "build": "tsc --noEmit && vite build",
     "db:migrate": "wrangler d1 migrations apply DB --local",
     "master:provision": "node scripts/provision-master.mjs",
-    "test": "node --test scripts/money.test.mjs && node scripts/integration.mjs",
+    "test": "node --test scripts/money.test.mjs scripts/page-contracts.test.mjs && node scripts/integration.mjs",
     "check": "tsc --noEmit",
-    "preview": "wrangler dev --port 8787"
+    "preview": "wrangler dev --port 8787",
+    "test:navigation": "playwright test"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
+    "@playwright/test": "^1.65.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",

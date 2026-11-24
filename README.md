@@ -119,3 +119,13 @@ Antes de publicar, validar autenticação e tempo de processamento no plano grat
 Backup e recuperação continuam destinados à V1.1. Não utilizar esta primeira base como registro financeiro definitivo sem concluir e validar os próximos incrementos e preparar a operação da hospedagem.
 
 Nenhum commit Git foi criado: a pasta inicial não continha repositório. O código está pronto para revisão local e posterior versionamento.
+
+## Regressão da navegação e tela branca
+
+`npm test` mantém as 110 verificações da API e os 2 testes monetários, acrescenta 3 testes de contratos e valida os retornos reais da API local contra os contratos das telas. O banco usado é descartável e local.
+
+Para os 6 testes de navegador, execute `npm ci` e `npm run test:navigation`. É necessário ter Google Chrome instalado. A suíte inicia somente o Vite em `127.0.0.1:5178`, intercepta as chamadas `/api/*` com dados fictícios e não usa login, credenciais ou banco reais. Cobre Master e Administrador, 30 trocas de menu por perfil, resposta atrasada do dashboard, retorno inválido, erro HTTP e recuperação do Error Boundary sem perder o menu.
+
+A tela só apresenta dados quando a chave da consulta concluída coincide com usuário, menu, filtros e atualização atuais. A consulta do dashboard verifica sua validade depois de todas as esperas. Respostas incompatíveis geram mensagem de erro, sem substituir valores financeiros ausentes por zero. O Error Boundary da página permite nova tentativa e navegação; a proteção externa permite recarregar se houver falha fora da página.
+
+Validação local não substitui homologação da versão publicada. Publicação e push dependem de autorização explícita.
