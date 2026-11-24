@@ -1,19 +1,22 @@
+
 {
   "name": "gmr-financeiro",
   "main": "worker/index.ts",
   "compatibility_date": "2025-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
   "assets": {
     "directory": "./dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"],
+    "run_worker_first": ["/api/*"]
   },
   "d1_databases": [
-  {
-    "binding": "DB",
-    "database_name": "gmr-financeiro-prod",
-    "database_id": "bd309d27-0a7d-4d14-addc-9055d9e7f15e",
-    "migrations_dir": "migrations"
-  }
-]
+    {
+      "binding": "DB",
+      "database_name": "gmr-financeiro-prod",
+      "database_id": "bd309d27-0a7d-4d14-addc-9055d9e7f15e",
+      "migrations_dir": "migrations"
+    }
+  ]
 }
