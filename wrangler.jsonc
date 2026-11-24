@@ -9,11 +9,11 @@
     "run_worker_first": ["/api/*"],
   },
   "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "gmr-local",
-      "database_id": "00000000-0000-0000-0000-000000000001",
-      "migrations_dir": "migrations",
-    },
-  ],
+  {
+    "binding": "DB",
+    "database_name": "gmr-financeiro-prod",
+    "database_id": "bd309d27-0a7d-4d14-addc-9055d9e7f15e",
+    "migrations_dir": "migrations"
+  }
+]
 }
