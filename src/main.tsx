@@ -1,3 +1,4 @@
+import { CategoryFields, MinistryPicker, categoryMatches, EditOperation, AuditPanel } from "./Enhancements";
 import { ErrorBoundary, PageContent } from "./ErrorBoundary";
 import { validatePageResponse } from "./pageContracts";
 import { PasswordInput } from "./PasswordInput";
@@ -38,6 +39,7 @@ type Me = {
   is_master: boolean;
   must_change: boolean;
   permissions: string[];
+  box_ids?: string[] | null;
 };
 const money = (v: number) =>
   new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
@@ -55,7 +57,7 @@ const labels: Record<string, string> = {
   dashboard: "Visão geral",
   operations: "Movimentações",
   accounts: "Contas financeiras",
-  boxes: "Caixas",
+  boxes: "Ministérios",
   categories: "Categorias",
   users: "Usuários",
   profiles: "Perfis de acesso",
@@ -77,7 +79,7 @@ const methods: Record<string, string> = {
 };
 const permissionLabel = (p: string) => {
   const [a, b] = p.split(".");
-  return `${labels[a] ?? ({ movements: "Movimentações", adjustments: "Ajustes" } as Item)[a] ?? a} · ${{ view: "Consultar", create: "Incluir", edit: "Editar", deactivate: "Desativar / reativar", manage: "Gerenciar", approve: "Aprovar", configure: "Configurar" }[b] ?? b}`;
+  return `${labels[a] ?? ({ movements: "Movimentações", adjustments: "Ajustes" } as Item)[a] ?? a} · ${{ view: "Consultar", create: "Incluir", edit: "Editar", deactivate: "Desativar / reativar", manage: "Gerenciar", approve: "Aprovar", export: "Exportar", configure: "Configurar" }[b] ?? b}`;
 };
 async function api<T = any>(
   path: string,
@@ -368,6 +370,8 @@ function App() {
             setIdentity(result);
             setData([]);
           }
+        } else if (page === "audit") {
+          if (valid) setData([]);
         } else if (page === "settings") {
           const r = await api("/settings");
           if (valid) setData([r]);
@@ -531,12 +535,13 @@ function App() {
           <span className="avatar">{me.name.charAt(0).toUpperCase()}</span>
           <div>
             <strong>{me.name}</strong>
+            <small>Login: {me.login}</small>
             <button onClick={() => setModal({ kind: "password" })}>
               Trocar senha
             </button>
           </div>
-          <button className="icon-button" onClick={logout} aria-label="Sair">
-            <LogOut size={18} />
+          <button className="logout-button" onClick={logout} aria-label="Sair">
+            <LogOut size={18} /> Sair
           </button>
         </div>
       </aside>
@@ -554,6 +559,7 @@ function App() {
             <ChevronRight size={14} />
             <strong>{labels[page] ?? "Acesso"}</strong>
           </div>
+          <div className="session-actions"><span title={me.name + " (" + me.login + ")"}>Usuário: <strong>{me.name}</strong> · {me.login}</span><button className="button secondary" aria-label="Sair da sessão" onClick={logout}><LogOut size={16}/> Sair</button></div>
           <span className="today">
             {new Intl.DateTimeFormat("pt-BR", {
               timeZone: "America/Sao_Paulo",
@@ -564,6 +570,7 @@ function App() {
           </span>
         </header>
         <main className="content">
+          {me.box_ids != null && <p className="scope-notice">Você está visualizando apenas os ministérios autorizados. Os saldos e totais correspondem a esse acesso.</p>}
           <div className="page-heading">
             <div>
               <span className="eyebrow">
@@ -633,7 +640,7 @@ function App() {
                     {page === "accounts"
                       ? "conta"
                       : page === "boxes"
-                        ? "caixa"
+                        ? "ministério"
                         : "categoria"}
                   </button>
                 )}
@@ -770,7 +777,7 @@ function App() {
                     </section>
                     <section className="panel">
                       <PanelTitle
-                        title="Saldo por caixa"
+                        title="Saldo por ministério"
                         note="Destinação dos recursos"
                       />
                       <div className="box-list">
@@ -813,11 +820,11 @@ function App() {
                         ) : (
                           <Empty
                             title="Cada recurso, uma finalidade"
-                            description="Crie caixas para organizar os recursos da igreja."
+                            description="Crie ministérios para organizar os recursos da igreja."
                             action={
                               can("boxes.view") ? () => go("boxes") : undefined
                             }
-                            actionLabel="Ver caixas"
+                            actionLabel="Ver ministérios"
                           />
                         )}
                       </div>
@@ -861,6 +868,7 @@ function App() {
                     />
                     <Movements
                       rows={data}
+                      onEdit={can("movements.edit") ? item => setModal({kind:"editOperation",item}) : undefined}
                       canApprove={can("adjustments.approve")}
                       me={me}
                       onApproved={() => done("Saldo de abertura aprovado.")}
@@ -925,6 +933,7 @@ function App() {
                             <tr key={x.id}>
                               <td>
                                 <strong>{x.name}</strong>
+                                {page === "categories" && <small className="block">{x.movement_type === "income" ? "Somente Entrada" : x.movement_type === "expense" ? "Somente Saída" : "Entrada e Saída"} · {x.all_boxes === 0 ? `${x.box_ids?.length ?? 0} ministério(s)` : "Todos os ministérios"}</small>}
                               </td>
                               <td>
                                 {page === "accounts" ? (
@@ -1049,64 +1058,7 @@ function App() {
                   }}
                 />
               )}
-              {page === "audit" && (
-                <section className="panel">
-                  <PanelTitle
-                    title="Atividades dos usuários"
-                    note="300 registros mais recentes. Senhas nunca são exibidas."
-                  />
-                  {data.length ? (
-                    <div className="audit-list">
-                      {data.map((x) => (
-                        <details key={x.id}>
-                          <summary>
-                            <History size={17} />
-                            <div>
-                              <strong>{x.author}</strong>
-                              <span>
-                                {x.action} · {x.entity}
-                              </span>
-                            </div>
-                            <time>
-                              {new Date(x.created_at).toLocaleString("pt-BR", {
-                                timeZone: "America/Sao_Paulo",
-                              })}
-                            </time>
-                            <ChevronRight size={16} />
-                          </summary>
-                          <div className="audit-detail">
-                            <strong>Antes</strong>
-                            <pre>
-                              {x.before_json
-                                ? JSON.stringify(
-                                    JSON.parse(x.before_json),
-                                    null,
-                                    2,
-                                  )
-                                : "—"}
-                            </pre>
-                            <strong>Depois</strong>
-                            <pre>
-                              {x.after_json
-                                ? JSON.stringify(
-                                    JSON.parse(x.after_json),
-                                    null,
-                                    2,
-                                  )
-                                : "—"}
-                            </pre>
-                          </div>
-                        </details>
-                      ))}
-                    </div>
-                  ) : (
-                    <Empty
-                      title="Nenhuma atividade disponível"
-                      description="As ações dos usuários comuns aparecerão aqui."
-                    />
-                  )}
-                </section>
-              )}
+              {page === "audit" && <AuditPanel canExport={can("audit.export")} />}
               {page === "settings" && (
                 <SettingsForm
                   current={data[0]?.adjustment_approval ?? "direct"}
@@ -1142,6 +1094,7 @@ function App() {
           }}
         />
       ) : null}
+      {modal?.kind === "editOperation" && <Modal title="Editar movimentação" onClose={() => setModal(null)}><EditOperation item={modal.item} onClose={() => setModal(null)} onDone={() => done("Movimentação corrigida. Alterações registradas no histórico.")} /></Modal>}
       {modal?.kind === "operation" && (
         <OperationForm
           initialType={modal.type}
@@ -1318,11 +1271,11 @@ function Filters({
         ))}
       </select>
       <select
-        aria-label="Filtrar caixa"
+        aria-label="Filtrar ministério"
         value={filters.box_id}
         onChange={(e) => change("box_id", e.target.value)}
       >
-        <option value="">Todos os caixas</option>
+        <option value="">Todos os ministérios</option>
         {boxes.map((b) => (
           <option key={b.id} value={b.id}>
             {b.name}
@@ -1333,12 +1286,14 @@ function Filters({
   );
 }
 function Movements({
+  onEdit,
   rows,
   canApprove,
   me,
   onApproved,
 }: {
   rows: Item[];
+  onEdit?: (item: Item) => void;
   canApprove: boolean;
   me: Me;
   onApproved: () => void;
@@ -1372,7 +1327,7 @@ function Movements({
               <tr>
                 <th>Movimentação</th>
                 <th>Data</th>
-                <th>Conta / caixa</th>
+                <th>Conta / ministério</th>
                 <th>Situação</th>
                 <th className="right">Valor</th>
               </tr>
@@ -1457,6 +1412,7 @@ function Movements({
                         ? "+ "
                         : ""}
                     {money(Math.abs(r.amount_cents))}
+                    {onEdit && r.type !== "opening" && r.status === "effective" && <button className="text-button" onClick={() => onEdit(r)} aria-label={"Editar movimentação " + r.number}>Editar</button>}
                   </td>
                 </tr>
               ))}
@@ -1486,7 +1442,9 @@ function RegistryForm({
     setError("");
     setBusy(true);
     try {
-      const b = Object.fromEntries(new FormData(e.currentTarget));
+      const form = new FormData(e.currentTarget);
+      const b: Item = Object.fromEntries(form);
+      if(resource === "categories") { b.box_ids = form.get("ministry_mode") === "all" ? null : form.getAll("box_ids"); delete b.ministry_mode; }
       await api(
         "/" + resource + (item ? "/" + item.id : ""),
         item ? "PATCH" : "POST",
@@ -1506,7 +1464,7 @@ function RegistryForm({
         (resource === "accounts"
           ? "conta financeira"
           : resource === "boxes"
-            ? "caixa"
+            ? "ministério"
             : "categoria")
       }
       onClose={onClose}
@@ -1523,7 +1481,7 @@ function RegistryForm({
               resource === "accounts"
                 ? "Ex.: Itaú — Conta principal"
                 : resource === "boxes"
-                  ? "Ex.: Caixa dos Jovens"
+                  ? "Ex.: Ministério dos Jovens"
                   : "Ex.: Ofertas"
             }
           />
@@ -1536,6 +1494,7 @@ function RegistryForm({
             </select>
           </Field>
         )}
+        {resource === "categories" && <CategoryFields item={item}/>}
         {resource === "boxes" && (
           <Field label="Descrição (opcional)">
             <textarea name="description" defaultValue={item?.description} />
@@ -1582,6 +1541,8 @@ function OperationForm({
     [ready, setReady] = useState(false),
     [policy, setPolicy] = useState("direct");
   useEffect(() => {
+    let valid = true;
+    setReady(false);
     Promise.all([
       api("/balances"),
       type === "opening" ? Promise.resolve([]) : api("/categories"),
@@ -1591,6 +1552,7 @@ function OperationForm({
         : Promise.resolve({ adjustment_approval: "direct" }),
     ])
       .then(([b, c, s, p]) => {
+        if(!valid) return;
         setLists({
           ...b,
           categories: c.filter((x: Item) => x.active),
@@ -1599,7 +1561,8 @@ function OperationForm({
         setPolicy(p.adjustment_approval);
         setReady(true);
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => { if(valid) setError(e.message) });
+    return () => { valid = false; };
   }, [type]);
   const a = lists.accounts.find((x: Item) => x.id === account),
     current =
@@ -1681,6 +1644,7 @@ function OperationForm({
                 className={type === t ? "chosen " + t : ""}
                 onClick={() => {
                   setType(t);
+                  setCategory("");
                   setConfirmed(false);
                 }}
               >
@@ -1744,16 +1708,17 @@ function OperationForm({
         </Field>
         {type !== "opening" && (
           <>
-            <Field label="Caixa">
-              <select
+            <Field label="Ministério">
+              <select aria-label="Ministério"
                 required
                 value={box}
                 onChange={(e) => {
                   setBox(e.target.value);
+                  setCategory("");
                   setConfirmed(false);
                 }}
               >
-                <option value="">Selecione o caixa</option>
+                <option value="">Selecione o ministério</option>
                 {lists.boxes
                   .filter((x: Item) => x.active)
                   .map((x: Item) => (
@@ -1765,13 +1730,13 @@ function OperationForm({
             </Field>
             <div className="form-grid">
               <Field label="Categoria">
-                <select
+                <select aria-label="Categoria"
                   required
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
                 >
                   <option value="">Selecione</option>
-                  {lists.categories.map((x: Item) => (
+                  {lists.categories.filter((x: Item) => categoryMatches(x,type,box)).map((x: Item) => (
                     <option key={x.id} value={x.id}>
                       {x.name}
                     </option>
@@ -1838,7 +1803,7 @@ function OperationForm({
                 {type === "opening"
                   ? "Não apropriado"
                   : (lists.boxes.find((x: Item) => x.id === box)?.name ??
-                    "Caixa")}
+                    "Ministério")}
               </span>
               <strong className={boxAfter < 0 ? "negative" : ""}>
                 {money(boxAfter)}
@@ -1990,7 +1955,8 @@ function UserForm({
   const [profiles, setProfiles] = useState<Item[]>([]),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    [reset, setReset] = useState(false);
+    [reset, setReset] = useState(false),
+    [profileId, setProfileId] = useState(item?.profile_id ?? "");
   useEffect(() => {
     api("/approval-profiles")
       .then(setProfiles)
@@ -2004,7 +1970,7 @@ function UserForm({
       await api(
         "/users" + (item ? "/" + item.id : ""),
         item ? "PATCH" : "POST",
-        Object.fromEntries(new FormData(e.currentTarget)),
+        (() => { const form = new FormData(e.currentTarget); return {...Object.fromEntries(form), box_ids: form.get("ministry_mode") === "all" ? null : form.getAll("box_ids")}; })(),
       );
       onDone();
     } catch (e) {
@@ -2029,7 +1995,8 @@ function UserForm({
           <select
             name="profile_id"
             required
-            defaultValue={item?.profile_id ?? ""}
+            value={profileId}
+            onChange={e => setProfileId(e.target.value)}
           >
             <option value="">Selecione</option>
             {profiles.map((p) => (
@@ -2039,6 +2006,7 @@ function UserForm({
             ))}
           </select>
         </Field>
+        <MinistryPicker allowEmpty initial={item?.box_scope ? JSON.parse(item.box_scope) : null}/>
         {item && (
           <label className="checkbox">
             <input

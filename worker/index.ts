@@ -12,6 +12,7 @@ type User = {
   must_change: number;
   session_version: number;
   permissions: string[];
+  box_scope: string | null;
 };
 type Row = Record<string, any>;
 const AREAS: Record<string, string[]> = {
@@ -21,9 +22,9 @@ const AREAS: Record<string, string[]> = {
   users: ["view", "manage", "approve"],
   institution: ["manage"],
   profiles: ["view", "manage"],
-  movements: ["view", "create"],
+  movements: ["view", "create", "edit"],
   dashboard: ["view"],
-  audit: ["view"],
+  audit: ["view", "export"],
   opening: ["create"],
   adjustments: ["approve", "configure"],
 };
@@ -63,7 +64,16 @@ function text(v: unknown, label: string, optional = false): string {
   return v.trim();
 }
 function allowed(u: User, p: string) {
-  return !!u.is_master || u.permissions.includes(p);
+  if (u.is_master) return true;
+  if (
+    u.box_scope != null &&
+    /^(users|profiles|institution|accounts|boxes|categories|opening|adjustments)\.(?!view$)/.test(
+      p,
+    )
+  )
+    return false;
+  if (u.box_scope != null && /^(users|profiles)\./.test(p)) return false;
+  return u.permissions.includes(p);
 }
 function need(u: User, p: string) {
   if (!allowed(u, p)) fail("Seu perfil não permite esta ação.", 403);
@@ -154,7 +164,9 @@ function publicUser(u: User) {
     profile_id: u.profile_id,
     is_master: !!u.is_master,
     must_change: !!u.must_change,
-    permissions: u.is_master ? PERMISSIONS : u.permissions,
+    permissions: PERMISSIONS.filter((p) => allowed(u, p)),
+    box_ids:
+      u.is_master || u.box_scope == null ? null : JSON.parse(u.box_scope),
   };
 }
 function audit(
@@ -217,26 +229,95 @@ function cents(v: unknown, signed = false) {
     fail("Informe um valor válido e diferente de zero, em centavos.");
   return v;
 }
-async function balances(db: D1Database) {
-  const [a, b, p] = await Promise.all([
-    db
-      .prepare(
-        "SELECT a.*,COALESCE(SUM(p.amount_cents),0) AS balance_cents,COALESCE(SUM(CASE WHEN p.box_id IS NULL THEN p.amount_cents ELSE 0 END),0) AS unallocated_cents FROM financial_accounts a LEFT JOIN postings p ON p.account_id=a.id GROUP BY a.id ORDER BY a.name",
-      )
-      .all(),
-    db
-      .prepare(
-        "SELECT b.*,COALESCE(SUM(p.amount_cents),0) AS balance_cents FROM boxes b LEFT JOIN postings p ON p.box_id=b.id GROUP BY b.id ORDER BY b.name",
-      )
-      .all(),
-    db
-      .prepare(
-        "SELECT account_id,box_id,SUM(amount_cents) AS balance_cents FROM postings GROUP BY account_id,box_id",
-      )
-      .all(),
-  ]);
-  return { accounts: a.results, boxes: b.results, positions: p.results };
+
+function scope(u: User): string[] | null {
+  return u.is_master || u.box_scope == null ? null : JSON.parse(u.box_scope);
 }
+function scopeClause(u: User, column: string, params: any[]) {
+  const ids = scope(u);
+  if (ids === null) return "1=1";
+  if (!ids.length) return "0=1";
+  params.push(JSON.stringify(ids));
+  return column + " IN (SELECT value FROM json_each(?))";
+}
+function needBox(u: User, id: string | null) {
+  const ids = scope(u);
+  if (ids !== null && (id === null || !ids.includes(id)))
+    fail("Ministério fora do seu acesso.", 403);
+}
+async function boxSelection(
+  db: D1Database,
+  value: unknown,
+): Promise<string[] | null> {
+  if (value === null) return null;
+  if (
+    !Array.isArray(value) ||
+    value.some((v) => typeof v !== "string") ||
+    value.length > 200
+  )
+    fail("Seleção de ministérios inválida.");
+  const ids = [...new Set(value)] as string[];
+  for (const id of ids) await active(db, "boxes", id, "Ministério");
+  return ids;
+}
+async function categoryRule(
+  db: D1Database,
+  category: Row,
+  type: string,
+  box: string,
+) {
+  if (category.movement_type !== "both" && category.movement_type !== type)
+    fail("A categoria não aceita este tipo de movimentação.");
+  if (
+    !category.all_boxes &&
+    !(await db
+      .prepare("SELECT 1 FROM category_boxes WHERE category_id=? AND box_id=?")
+      .bind(category.id, box)
+      .first())
+  )
+    fail("A categoria não pertence ao ministério selecionado.");
+}
+
+async function balances(db: D1Database, u: User) {
+  const params: any[] = [];
+  const condition = scopeClause(u, "box_id", params);
+  const p = await db
+    .prepare(
+      "SELECT account_id,box_id,SUM(amount_cents) AS balance_cents FROM postings WHERE " +
+        condition +
+        " GROUP BY account_id,box_id",
+    )
+    .bind(...params)
+    .all<Row>();
+  const accounts = (
+    await db
+      .prepare("SELECT * FROM financial_accounts ORDER BY name")
+      .all<Row>()
+  ).results.map((a) => ({
+    ...a,
+    balance_cents: p.results
+      .filter((p) => p.account_id === a.id)
+      .reduce((n, p) => n + Number(p.balance_cents), 0),
+    unallocated_cents: p.results
+      .filter((p) => p.account_id === a.id && p.box_id === null)
+      .reduce((n, p) => n + Number(p.balance_cents), 0),
+  }));
+  const bp: any[] = [];
+  const bc = scopeClause(u, "id", bp);
+  const boxes = (
+    await db
+      .prepare("SELECT * FROM boxes WHERE " + bc + " ORDER BY name")
+      .bind(...bp)
+      .all<Row>()
+  ).results.map((b) => ({
+    ...b,
+    balance_cents: p.results
+      .filter((p) => p.box_id === b.id)
+      .reduce((n, p) => n + Number(p.balance_cents), 0),
+  }));
+  return { accounts, boxes, positions: p.results };
+}
+
 function bodySize(req: Request, limit = 32768) {
   if (Number(req.headers.get("Content-Length") ?? 0) > limit)
     fail("Solicitação muito grande.", 413);
@@ -664,13 +745,14 @@ async function handle(req: Request, env: Env): Promise<Response> {
         params.push(v);
       }
     }
+    clauses.push(scopeClause(u, "box_id", params));
     const totals = await db
       .prepare(
         `SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount_cents ELSE 0 END),0) AS income,COALESCE(SUM(CASE WHEN type='expense' THEN amount_cents ELSE 0 END),0) AS expense FROM operations WHERE ${clauses.join(" AND ")}`,
       )
       .bind(...params)
       .first();
-    return json({ ...(await balances(db)), totals });
+    return json({ ...(await balances(db, u)), totals });
   }
   const tables: Record<string, string> = {
     accounts: "financial_accounts",
@@ -685,15 +767,46 @@ async function handle(req: Request, env: Env): Promise<Response> {
     const area = resource === "subcategories" ? "categories" : resource;
     if (method === "GET") {
       need(u, `${area}.view`);
-      return json(
-        (
+      const scopeParams: any[] = [];
+      let where = "1=1";
+      if (resource === "boxes") where = scopeClause(u, "id", scopeParams);
+      if (resource === "categories" && scope(u) !== null)
+        where =
+          "(all_boxes=1 OR id IN (SELECT category_id FROM category_boxes WHERE " +
+          scopeClause(u, "box_id", scopeParams) +
+          "))";
+      if (resource === "subcategories" && scope(u) !== null)
+        where =
+          "category_id IN (SELECT id FROM categories WHERE all_boxes=1 OR id IN (SELECT category_id FROM category_boxes WHERE " +
+          scopeClause(u, "box_id", scopeParams) +
+          "))";
+      const result = await db
+        .prepare(
+          `SELECT id,name,active${resource === "accounts" ? ",type" : resource === "boxes" ? ",description" : resource === "subcategories" ? ",category_id" : resource === "categories" ? ",movement_type,all_boxes" : ""} FROM ${table} WHERE ${where} ORDER BY name`,
+        )
+        .bind(...scopeParams)
+        .all<Row>();
+      if (resource === "categories") {
+        const links = (
           await db
-            .prepare(
-              `SELECT id,name,active${resource === "accounts" ? ",type" : resource === "boxes" ? ",description" : resource === "subcategories" ? ",category_id" : ""} FROM ${table} ORDER BY name`,
-            )
-            .all()
-        ).results,
-      );
+            .prepare("SELECT category_id,box_id FROM category_boxes")
+            .all<Row>()
+        ).results;
+        const ids = scope(u);
+        return json(
+          result.results.map((c) => ({
+            ...c,
+            box_ids: links
+              .filter(
+                (l) =>
+                  l.category_id === c.id &&
+                  (ids === null || ids.includes(l.box_id)),
+              )
+              .map((l) => l.box_id),
+          })),
+        );
+      }
+      return json(result.results);
     }
     const b = await readBody(req);
     if (method === "POST" && !id) {
@@ -714,6 +827,22 @@ async function handle(req: Request, env: Env): Promise<Response> {
         fields.push("description");
         values.push(data.description);
       }
+      let categoryBoxes: string[] | null = null;
+      if (resource === "categories") {
+        const type = b.movement_type ?? "both";
+        if (!["both", "income", "expense"].includes(type))
+          fail("Tipo de categoria inválido.");
+        categoryBoxes = await boxSelection(db, b.box_ids ?? null);
+        if (categoryBoxes?.length === 0)
+          fail("Selecione ao menos um ministério ou todos.");
+        fields.push("movement_type", "all_boxes");
+        values.push(type, categoryBoxes === null ? 1 : 0);
+        Object.assign(data, {
+          movement_type: type,
+          all_boxes: categoryBoxes === null ? 1 : 0,
+          box_ids: categoryBoxes,
+        });
+      }
       if (resource === "subcategories") {
         await active(db, "categories", b.category_id, "Categoria");
         fields.push("category_id");
@@ -726,6 +855,13 @@ async function handle(req: Request, env: Env): Promise<Response> {
             `INSERT INTO ${table} (${fields.join(",")}) VALUES (${fields.map(() => "?").join(",")})`,
           )
           .bind(...values),
+        ...(categoryBoxes ?? []).map((box) =>
+          db
+            .prepare(
+              "INSERT INTO category_boxes(category_id,box_id) VALUES (?,?)",
+            )
+            .bind(recordId, box),
+        ),
         audit(db, u, "create", resource, recordId, null, data),
       ]);
       return json(data, 201);
@@ -778,11 +914,56 @@ async function handle(req: Request, env: Env): Promise<Response> {
             fail("Zere todos os saldos vinculados antes de desativar.");
         }
       }
+      let categoryBoxes: string[] | null | undefined;
+      if (
+        resource === "categories" &&
+        (b.movement_type !== undefined || b.box_ids !== undefined)
+      ) {
+        need(u, "categories.edit");
+        before.box_ids = (
+          await db
+            .prepare("SELECT box_id FROM category_boxes WHERE category_id=?")
+            .bind(id)
+            .all<Row>()
+        ).results.map((r) => r.box_id);
+        if (b.movement_type !== undefined) {
+          if (!["both", "income", "expense"].includes(b.movement_type))
+            fail("Tipo de categoria inválido.");
+          fields.push("movement_type=?");
+          values.push(b.movement_type);
+          data.movement_type = b.movement_type;
+        }
+        if (b.box_ids !== undefined) {
+          categoryBoxes = await boxSelection(db, b.box_ids);
+          if (categoryBoxes?.length === 0)
+            fail("Selecione ao menos um ministério ou todos.");
+          fields.push("all_boxes=?");
+          values.push(categoryBoxes === null ? 1 : 0);
+          Object.assign(data, {
+            all_boxes: categoryBoxes === null ? 1 : 0,
+            box_ids: categoryBoxes,
+          });
+        }
+      }
       if (!fields.length) fail("Nenhuma alteração informada.");
       await db.batch([
         db
           .prepare(`UPDATE ${table} SET ${fields.join(",")} WHERE id=?`)
           .bind(...values, id),
+        ...(categoryBoxes === undefined
+          ? []
+          : [
+              db
+                .prepare("DELETE FROM category_boxes WHERE category_id=?")
+                .bind(id),
+              ...(categoryBoxes ?? []).map((box) =>
+                db
+                  .prepare(
+                    "INSERT INTO category_boxes(category_id,box_id) VALUES (?,?)",
+                  )
+                  .bind(id, box),
+              ),
+            ]),
         audit(db, u, "update", resource, id, before, data),
       ]);
       return json({ ok: true });
@@ -826,6 +1007,18 @@ async function handle(req: Request, env: Env): Promise<Response> {
       return json({ id: recordId }, 201);
     }
     if (method === "PATCH" && id) {
+      if (
+        isAdmin(ps) &&
+        (await db
+          .prepare(
+            "SELECT 1 FROM users WHERE profile_id=? AND box_scope IS NOT NULL",
+          )
+          .bind(id)
+          .first())
+      )
+        fail(
+          "Remova a restrição de ministérios dos usuários antes de tornar este perfil administrativo.",
+        );
       const before = await db
         .prepare("SELECT * FROM profiles WHERE id=?")
         .bind(id)
@@ -880,7 +1073,7 @@ async function handle(req: Request, env: Env): Promise<Response> {
         (
           await db
             .prepare(
-              "SELECT u.id,u.name,u.login,u.profile_id,u.active,u.must_change,u.approval_state,u.requested_role,u.is_responsible,p.name AS profile_name FROM users u JOIN profiles p ON p.id=u.profile_id WHERE u.is_master=0 ORDER BY CASE WHEN u.approval_state='pending' THEN 0 ELSE 1 END,u.name",
+              "SELECT u.id,u.name,u.login,u.profile_id,u.active,u.must_change,u.approval_state,u.requested_role,u.is_responsible,u.box_scope,p.name AS profile_name FROM users u JOIN profiles p ON p.id=u.profile_id WHERE u.is_master=0 ORDER BY CASE WHEN u.approval_state='pending' THEN 0 ELSE 1 END,u.name",
             )
             .all()
         ).results.filter(
@@ -894,13 +1087,16 @@ async function handle(req: Request, env: Env): Promise<Response> {
       need(u, "users.approve");
       const profile = await active(db, "profiles", b.profile_id, "Perfil");
       permissions(JSON.parse(profile.permissions), u);
+      const boxes = await boxSelection(db, b.box_ids ?? null);
+      if (boxes !== null && isAdmin(JSON.parse(profile.permissions)))
+        fail("Administradores precisam de acesso a todos os ministérios.");
       const recordId = uid(),
         name = text(b.name, "Nome"),
         login = text(b.login, "Login").toLowerCase();
       await db.batch([
         db
           .prepare(
-            "INSERT INTO users(id,name,login,password_hash,profile_id,created_by,created_at) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO users(id,name,login,password_hash,profile_id,created_by,created_at,box_scope) VALUES (?,?,?,?,?,?,?,?)",
           )
           .bind(
             recordId,
@@ -910,11 +1106,13 @@ async function handle(req: Request, env: Env): Promise<Response> {
             profile.id,
             u.id,
             now(),
+            boxes === null ? null : JSON.stringify(boxes),
           ),
         audit(db, u, "create", "user", recordId, null, {
           name,
           login,
           profile_id: profile.id,
+          box_ids: boxes,
         }),
       ]);
       return json({ id: recordId }, 201);
@@ -922,7 +1120,7 @@ async function handle(req: Request, env: Env): Promise<Response> {
     if (method === "PATCH" && id) {
       const before = await db
         .prepare(
-          "SELECT id,name,login,profile_id,active,approval_state FROM users WHERE id=? AND is_master=0",
+          "SELECT id,name,login,profile_id,active,approval_state,box_scope FROM users WHERE id=? AND is_master=0",
         )
         .bind(id)
         .first<Row>();
@@ -949,13 +1147,27 @@ async function handle(req: Request, env: Env): Promise<Response> {
         (await lastAdmin(db, id, null)) === 0
       )
         fail("Não é possível retirar o acesso do último administrador ativo.");
+      const boxes =
+        b.box_ids === undefined
+          ? before.box_scope === null
+            ? null
+            : JSON.parse(before.box_scope)
+          : await boxSelection(db, b.box_ids);
+      if (boxes !== null && isAdmin(JSON.parse(profile.permissions)))
+        fail("Administradores precisam de acesso a todos os ministérios.");
       const sets = [
+          "box_scope=?",
           "name=?",
           "profile_id=?",
           "active=?",
           "session_version=session_version+1",
         ],
-        values: any[] = [name, profile.id, enabled];
+        values: any[] = [
+          boxes === null ? null : JSON.stringify(boxes),
+          name,
+          profile.id,
+          enabled,
+        ];
       if (b.password !== undefined) {
         sets.push("password_hash=?", "must_change=1");
         values.push(await passwordHash(validatePassword(b.password)));
@@ -977,6 +1189,7 @@ async function handle(req: Request, env: Env): Promise<Response> {
             name,
             profile_id: profile.id,
             active: enabled,
+            box_ids: boxes,
             ...(b.password ? { temporary_password_reset: true } : {}),
           },
         ),
@@ -1018,7 +1231,7 @@ async function handle(req: Request, env: Env): Promise<Response> {
       !allowed(u, "dashboard.view")
     )
       fail("Seu perfil não permite esta consulta.", 403);
-    return json(await balances(db));
+    return json(await balances(db, u));
   }
   if (resource === "operations") {
     if (method === "GET") {
@@ -1038,9 +1251,10 @@ async function handle(req: Request, env: Env): Promise<Response> {
           params.push(v);
         }
       }
+      cond.push(scopeClause(u, "o.box_id", params));
       const rows = await db
         .prepare(
-          `SELECT o.id,o.number,o.type,o.movement_date,o.description,o.status,o.account_id,o.box_id,o.category_id,o.subcategory_id,o.amount_cents,o.payment_method,o.created_at,a.name AS account_name,b.name AS box_name,c.name AS category_name,sc.name AS subcategory_name,CASE WHEN u.is_master=1 THEN 'Responsável restrito' ELSE u.name END AS author FROM operations o JOIN financial_accounts a ON a.id=o.account_id LEFT JOIN boxes b ON b.id=o.box_id LEFT JOIN categories c ON c.id=o.category_id LEFT JOIN subcategories sc ON sc.id=o.subcategory_id JOIN users u ON u.id=o.created_by WHERE ${cond.join(" AND ")} ORDER BY o.movement_date DESC,o.number DESC LIMIT 500`,
+          `SELECT o.version,o.id,o.number,o.type,o.movement_date,o.description,o.status,o.account_id,o.box_id,o.category_id,o.subcategory_id,o.amount_cents,o.payment_method,o.created_at,a.name AS account_name,b.name AS box_name,c.name AS category_name,sc.name AS subcategory_name,CASE WHEN u.is_master=1 THEN 'Responsável restrito' ELSE u.name END AS author FROM operations o JOIN financial_accounts a ON a.id=o.account_id LEFT JOIN boxes b ON b.id=o.box_id LEFT JOIN categories c ON c.id=o.category_id LEFT JOIN subcategories sc ON sc.id=o.subcategory_id JOIN users u ON u.id=o.created_by WHERE ${cond.join(" AND ")} ORDER BY o.movement_date DESC,o.number DESC LIMIT 500`,
         )
         .bind(...params)
         .all();
@@ -1064,8 +1278,10 @@ async function handle(req: Request, env: Env): Promise<Response> {
         category: Row | null = null,
         sub: Row | null = null;
       if (b.type !== "opening") {
-        box = await active(db, "boxes", b.box_id, "Caixa");
+        box = await active(db, "boxes", b.box_id, "Ministério");
         category = await active(db, "categories", b.category_id, "Categoria");
+        needBox(u, box.id);
+        await categoryRule(db, category, b.type, box.id);
         if (b.subcategory_id) {
           sub = await active(
             db,
@@ -1154,6 +1370,144 @@ async function handle(req: Request, env: Env): Promise<Response> {
       await db.batch(statements);
       return json(data, 201);
     }
+    if (method === "PATCH" && id && path === "/api/operations/" + id) {
+      need(u, "movements.edit");
+      const b = await readBody(req);
+      const before = await db
+        .prepare("SELECT * FROM operations WHERE id=?")
+        .bind(id)
+        .first<Row>();
+      if (!before) fail("Movimentação não encontrada.", 404);
+      needBox(u, before.box_id);
+      if (before.type === "opening" || before.status !== "effective")
+        fail("A edição é permitida somente em entradas e saídas efetivadas.");
+      if (!Number.isInteger(b.version) || b.version !== before.version)
+        fail("A movimentação foi alterada. Reabra para editar.", 409);
+      for (const key of ["type", "account_id", "box_id", "status"])
+        if (b[key] !== undefined && b[key] !== before[key])
+          fail(
+            "Tipo, conta, ministério e situação não podem ser alterados nesta edição.",
+          );
+      const amount = cents(b.amount_cents),
+        movementDate = date(b.movement_date),
+        description = text(b.description, "Descrição"),
+        reason = text(b.reason, "Motivo da correção");
+      const category = await active(
+        db,
+        "categories",
+        b.category_id,
+        "Categoria",
+      );
+      await categoryRule(db, category, before.type, before.box_id);
+      if (b.subcategory_id) {
+        const sub = await active(
+          db,
+          "subcategories",
+          b.subcategory_id,
+          "Subcategoria",
+        );
+        if (sub.category_id !== category.id)
+          fail("A subcategoria não pertence à categoria selecionada.");
+      }
+      const method =
+        before.type === "expense"
+          ? (b.payment_method ?? before.payment_method)
+          : null;
+      if (
+        before.type === "expense" &&
+        !["cash", "pix", "credit", "debit"].includes(method)
+      )
+        fail("Informe a forma de pagamento.");
+      const delta =
+        (before.type === "expense" ? -1 : 1) * (amount - before.amount_cents);
+      const account = await db
+        .prepare("SELECT * FROM financial_accounts WHERE id=?")
+        .bind(before.account_id)
+        .first<Row>();
+      const current = await db
+        .prepare(
+          "SELECT COALESCE(SUM(amount_cents),0) AS total,COALESCE(SUM(CASE WHEN box_id IS ? THEN amount_cents ELSE 0 END),0) AS position FROM postings WHERE account_id=?",
+        )
+        .bind(before.box_id, before.account_id)
+        .first<Row>();
+      if (delta !== 0) {
+        await active(
+          db,
+          "financial_accounts",
+          before.account_id,
+          "Conta financeira",
+        );
+        await active(db, "boxes", before.box_id, "Ministério");
+        if (account!.type === "cash" && current!.total + delta < 0)
+          fail("Dinheiro em espécie não pode ficar negativo.");
+        if (
+          (current!.total + delta < 0 || current!.position + delta < 0) &&
+          b.confirm_negative !== true
+        )
+          fail("O saldo ficará negativo. Confira e confirme o aviso.", 409);
+      }
+      const snapshot = (row: Row) =>
+        Object.fromEntries(
+          [
+            "id",
+            "number",
+            "type",
+            "movement_date",
+            "description",
+            "status",
+            "account_id",
+            "box_id",
+            "category_id",
+            "subcategory_id",
+            "amount_cents",
+            "payment_method",
+            "version",
+          ].map((k) => [k, row[k]]),
+        );
+      const after = {
+        ...snapshot(before),
+        movement_date: movementDate,
+        description,
+        category_id: category.id,
+        subcategory_id: b.subcategory_id || null,
+        amount_cents: amount,
+        payment_method: method,
+        version: before.version + 1,
+      };
+      const statements = [
+        db
+          .prepare(
+            "UPDATE operations SET movement_date=?,description=?,category_id=?,subcategory_id=?,amount_cents=?,payment_method=?,version=CASE WHEN version=? THEN version+1 ELSE -1 END WHERE id=?",
+          )
+          .bind(
+            movementDate,
+            description,
+            category.id,
+            b.subcategory_id || null,
+            amount,
+            method,
+            b.version,
+            id,
+          ),
+      ];
+      // Keep immutable postings: only the difference changes the balance, in the same transaction.
+      if (delta !== 0)
+        statements.push(
+          db
+            .prepare(
+              "INSERT INTO postings(id,operation_id,account_id,box_id,amount_cents,created_at) VALUES (?,?,?,?,?,?)",
+            )
+            .bind(uid(), id, before.account_id, before.box_id, delta, now()),
+        );
+      statements.push(
+        audit(db, u, "update", "operation", id, snapshot(before), {
+          ...after,
+          reason,
+        }),
+      );
+      await db.batch(statements);
+      return json(after);
+    }
     if (method === "POST" && id && path.endsWith("/approve")) {
       need(u, "adjustments.approve");
       const op = await db
@@ -1196,17 +1550,141 @@ async function handle(req: Request, env: Env): Promise<Response> {
       return json({ ok: true });
     }
   }
-  if (path === "/api/audit" && method === "GET") {
+  if (path.startsWith("/api/audit") && method === "GET") {
     need(u, "audit.view");
-    return json(
-      (
+    const cond = ["a.actor_master=0"],
+      params: any[] = [];
+    if (scope(u) !== null) {
+      // Do not reveal unrelated administration or the previous ministry of a correction.
+      cond.push("a.entity='operation'");
+      cond.push(
+        scopeClause(u, "json_extract(a.after_json,'$.box_id')", params),
+      );
+      const beforeParams: any[] = [];
+      const beforeScope = scopeClause(
+        u,
+        "json_extract(a.before_json,'$.box_id')",
+        beforeParams,
+      );
+      cond.push("(a.before_json IS NULL OR " + beforeScope + ")");
+      params.push(...beforeParams);
+    }
+    if (path === "/api/audit/options") {
+      const rows = (
         await db
           .prepare(
-            "SELECT a.id,a.action,a.entity,a.record_id,a.before_json,a.after_json,a.created_at,u.name AS author FROM audit a JOIN users u ON u.id=a.user_id WHERE a.actor_master=0 ORDER BY a.created_at DESC LIMIT 300",
+            "SELECT DISTINCT u.id,u.name,a.action FROM audit a JOIN users u ON u.id=a.user_id WHERE " +
+              cond.join(" AND ") +
+              " ORDER BY u.name",
           )
-          .all()
-      ).results,
-    );
+          .bind(...params)
+          .all<Row>()
+      ).results;
+      return json({
+        users: [
+          ...new Map(
+            rows.map((r) => [r.id, { id: r.id, name: r.name }]),
+          ).values(),
+        ],
+        actions: [...new Set(rows.map((r) => r.action))],
+      });
+    }
+    const from = url.searchParams.get("from"),
+      to = url.searchParams.get("to");
+    if (from) {
+      date(from);
+      cond.push("a.created_at>=?");
+      params.push(new Date(from + "T00:00:00-03:00").toISOString());
+    }
+    if (to) {
+      date(to);
+      cond.push("a.created_at<?");
+      params.push(
+        new Date(Date.parse(to + "T00:00:00-03:00") + 86400000).toISOString(),
+      );
+    }
+    if (from && to && from > to)
+      fail("O início do período deve ser anterior ao fim.");
+    for (const [key, col] of [
+      ["user_id", "a.user_id"],
+      ["action", "a.action"],
+    ]) {
+      const v = url.searchParams.get(key);
+      if (v) {
+        cond.push(col + "=?");
+        params.push(text(v, key));
+      }
+    }
+    const base =
+      "SELECT a.id,a.user_id,a.action,a.entity,a.record_id,a.before_json,a.after_json,a.created_at,u.name AS author FROM audit a JOIN users u ON u.id=a.user_id WHERE " +
+      cond.join(" AND ") +
+      " ORDER BY a.created_at DESC,a.id DESC";
+    if (path === "/api/audit/export") {
+      need(u, "audit.export");
+      const rows = (
+        await db
+          .prepare(base + " LIMIT 10001")
+          .bind(...params)
+          .all<Row>()
+      ).results;
+      if (rows.length > 10000)
+        fail("Refine os filtros para exportar até 10.000 atividades.");
+      const cell = (v: unknown) => {
+        let value = String(v ?? "");
+        if (/^[\s\u0000-\u001f]*[=+\-@]/.test(value) || /^[\t\r\n]/.test(value))
+          value = "'" + value;
+        return '"' + value.replaceAll('"', '""') + '"';
+      };
+      const keys = [
+        "created_at",
+        "author",
+        "action",
+        "entity",
+        "record_id",
+        "before_json",
+        "after_json",
+      ];
+      const csv =
+        "\ufeff" +
+        [
+          [
+            "Data UTC",
+            "Usuário",
+            "Ação",
+            "Recurso",
+            "Registro",
+            "Antes",
+            "Depois",
+          ],
+          ...rows.map((r) => keys.map((k) => r[k])),
+        ]
+          .map((row) => row.map(cell).join(";"))
+          .join("\r\n");
+      return new Response(csv, {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition":
+            'attachment; filename="historico-atividades.csv"',
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    if (path !== "/api/audit") fail("Recurso não encontrado.", 404);
+    const raw = url.searchParams.get("offset") ?? "0";
+    if (
+      !/^\d+$/.test(raw) ||
+      !Number.isSafeInteger(Number(raw)) ||
+      Number(raw) > 1000000
+    )
+      fail("Página inválida.");
+    const rows = (
+      await db
+        .prepare(base + " LIMIT 100 OFFSET ?")
+        .bind(...params, Number(raw))
+        .all<Row>()
+    ).results;
+    return json(rows);
   }
   fail("Recurso não encontrado.", 404);
 }
@@ -1219,15 +1697,17 @@ export default {
         return json({ error: error.message }, error.status);
       const message = String(error);
       const guards: Record<string, string> = {
+        operation_version:
+          "A movimentação foi alterada por outra pessoa. Reabra para editar.",
         CASH_NEGATIVE: "Dinheiro em espécie não pode ficar negativo.",
         LAST_ADMIN:
           "Não é possível retirar o acesso do último administrador ativo.",
         ACCOUNT_BALANCE_NOT_ZERO:
           "Zere todos os saldos da conta antes de desativar.",
         BOX_BALANCE_NOT_ZERO:
-          "Zere os saldos do caixa em cada conta antes de desativar.",
+          "Zere os saldos do ministério em cada conta antes de desativar.",
         ACCOUNT_INACTIVE: "A conta financeira está inativa.",
-        BOX_INACTIVE: "O caixa está inativo.",
+        BOX_INACTIVE: "O ministério está inativo.",
         PROFILE_ACTIVE_USERS: "Há usuários ativos vinculados a este perfil.",
       };
       for (const [key, value] of Object.entries(guards))

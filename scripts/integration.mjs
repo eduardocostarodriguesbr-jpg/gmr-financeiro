@@ -1,3 +1,4 @@
+import { verifyHomologation } from "./homologation.mjs";
 import { validatePageResponse } from "../src/pageContracts.ts";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -659,6 +660,16 @@ try {
   assert.equal(html.status, 200);
   assert((await html.text()).includes("GMR"));
   checks++;
+  assert.equal(checks, 110, "Baseline preservada");
+  const extraChecks = await verifyHomologation({
+    request,
+    create,
+    admin,
+    master,
+    base,
+    date,
+  });
+  checks += extraChecks;
   console.log(
     `OK: ${checks} verificações de API, segurança e integridade financeira. Banco de teste isolado.`,
   );

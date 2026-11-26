@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "db:migrate": "wrangler d1 migrations apply DB --local",
     "master:provision": "node scripts/provision-master.mjs",
-    "test": "node --test scripts/money.test.mjs scripts/page-contracts.test.mjs && node scripts/integration.mjs",
+    "test": "node --test scripts/money.test.mjs scripts/page-contracts.test.mjs && node scripts/migration-upgrade.mjs && node scripts/integration.mjs",
     "check": "tsc --noEmit",
     "preview": "wrangler dev --port 8787",
     "test:navigation": "playwright test"

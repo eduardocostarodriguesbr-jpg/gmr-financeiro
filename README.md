@@ -129,3 +129,21 @@ Para os 6 testes de navegador, execute `npm ci` e `npm run test:navigation`. É 
 A tela só apresenta dados quando a chave da consulta concluída coincide com usuário, menu, filtros e atualização atuais. A consulta do dashboard verifica sua validade depois de todas as esperas. Respostas incompatíveis geram mensagem de erro, sem substituir valores financeiros ausentes por zero. O Error Boundary da página permite nova tentativa e navegação; a proteção externa permite recarregar se houver falha fora da página.
 
 Validação local não substitui homologação da versão publicada. Publicação e push dependem de autorização explícita.
+
+## Ajustes da homologação — Ministérios e lançamentos
+
+A interface usa **Ministérios**, mantendo os identificadores e vínculos antigos de `boxes`. A migration `0005_homologation.sql` renomeia somente o cadastro cujo nome é exatamente “Caixa da Igreja” para “Administração Geral”, se esse nome ainda não existir. Outros nomes permanecem intactos.
+
+- Categorias aceitam Entrada, Saída ou ambas, para todos os ministérios ou uma seleção de vários. As validações são aplicadas também pela API; configurações novas não reescrevem o histórico.
+- A permissão `movements.edit` permite corrigir valor, categoria/subcategoria, data, descrição e forma de pagamento de entradas e saídas efetivadas. Tipo, conta, ministério e saldo de abertura ficam preservados. A edição exige motivo e versão atual; registra antes/depois, autor e horário. Não exige estorno manual. A diferença de valor atualiza o saldo na mesma transação, sem apagar lançamentos de saldo ou auditoria. Permanecem os limites monetários, a confirmação de saldo negativo e o bloqueio de dinheiro em espécie negativo.
+- O cadastro de usuário permite restringir acesso a ministérios. O padrão atual continua sendo todos. Uma seleção vazia não concede acesso a movimentações. As consultas, saldos, totais, histórico e exportação respeitam o escopo no servidor; saldos sem ministério não são mostrados a usuários restritos. Usuários restritos podem operar conforme as permissões de seu perfil, mas não administrar usuários, perfis, cadastros globais ou saldos de abertura. Administradores precisam de acesso a todos os ministérios. Alterar o escopo encerra as sessões antigas.
+- Usuário/login e Sair ficam na barra superior e no menu. O menu fixo tem rolagem própria em telas baixas e celulares.
+- Histórico tem filtros por período (dias no horário de Brasília), usuário e ação; páginas de 100 registros. A permissão `audit.export` habilita CSV dos resultados filtrados, até 10.000 registros por exportação, com proteção contra fórmulas. A invisibilidade administrativa do Master permanece.
+
+`npm test` executa os testes anteriores, uma atualização de banco antigo fictício e os novos cenários de homologação. `npm run test:navigation` executa 15 testes no Chrome, incluindo quatro resoluções e os seis cenários da correção da tela branca. Somente dados sintéticos e D1 local são usados.
+
+### Preparação da publicação manual
+
+A nova versão do Worker depende da migration **0005**. Na preparação da publicação, revisar a migration e o backup, aplicá-la no banco correto **antes de o Worker novo começar a atender** e depois publicar frontend/Worker juntos. Se o push aciona publicação automática, aplicar a migration antes desse push ou pausar o fluxo automático durante a preparação. O Worker anterior continua compatível com as colunas novas. Não publicar somente o frontend nem o Worker novo sem a migration. Não executar novamente migrations antigas, provisionamento Master ou comandos de limpeza no banco de produção.
+
+Nenhum comando remoto de migration, commit, push ou deploy é executado pelos testes. Essas ações continuam sob controle manual do responsável. Homologar os novos fluxos após a publicação antes de retomar o manual.

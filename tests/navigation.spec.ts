@@ -50,6 +50,7 @@ const fixtures: Record<string, any> = {
   ],
   "/operations": [operation],
   "/audit": [],
+  "/audit/options": { users: [], actions: [] },
   "/settings": { adjustment_approval: "direct" },
 };
 async function setup(page: Page, master: boolean) {
@@ -92,7 +93,7 @@ for (const master of [true, false]) {
         "Perfis de acesso",
         "Movimentações",
         "Categorias",
-        "Caixas",
+        "Ministérios",
         "Usuários",
         "Visão geral",
         "Histórico de atividades",
@@ -164,7 +165,7 @@ test("Error Boundary preserva menus e permite tentar novamente", async ({
   page,
 }) => {
   await setup(page, true);
-  await page.route("**/api/audit", (r) =>
+  await page.route("**/api/audit?**", (r) =>
     r.fulfill({
       json: [{ id: "bad", created_at: "2026-11-24", before_json: "{invalid" }],
     }),
@@ -177,8 +178,10 @@ test("Error Boundary preserva menus e permite tentar novamente", async ({
   await go(page, "Contas financeiras");
   await expect(page.getByText("Conta de teste", { exact: true })).toBeVisible();
   await go(page, "Histórico de atividades");
-  await expect(page.getByRole("alert")).toContainText("Não foi possível exibir esta tela");
-  await page.route("**/api/audit", (r) => r.fulfill({ json: [] }));
+  await expect(page.getByRole("alert")).toContainText(
+    "Não foi possível exibir esta tela",
+  );
+  await page.route("**/api/audit?**", (r) => r.fulfill({ json: [] }));
   await page.getByRole("button", { name: "Tentar novamente" }).click();
   await expect(page.getByText("Nenhuma atividade disponível")).toBeVisible();
   await go(page, "Contas financeiras");
