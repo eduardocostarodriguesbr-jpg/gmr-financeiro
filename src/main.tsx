@@ -31,6 +31,8 @@ import "./style.css";
 import { AccessScreen, ApprovalPanel, InstitutionForm } from "./Access";
 import { parseCents as toCents } from "./money";
 
+declare const __APP_RELEASE__: { version: string; updatedAt: string };
+
 type Item = Record<string, any>;
 type Me = {
   id: string;
@@ -531,19 +533,7 @@ function App() {
             <span>Histórico preservado em cada ação.</span>
           </div>
         </div>
-        <div className="user-card">
-          <span className="avatar">{me.name.charAt(0).toUpperCase()}</span>
-          <div>
-            <strong>{me.name}</strong>
-            <small>Login: {me.login}</small>
-            <button onClick={() => setModal({ kind: "password" })}>
-              Trocar senha
-            </button>
-          </div>
-          <button className="logout-button" onClick={logout} aria-label="Sair">
-            <LogOut size={18} /> Sair
-          </button>
-        </div>
+
       </aside>
       <div className="main-shell">
         <header className="topbar">
@@ -559,7 +549,7 @@ function App() {
             <ChevronRight size={14} />
             <strong>{labels[page] ?? "Acesso"}</strong>
           </div>
-          <div className="session-actions"><span title={me.name + " (" + me.login + ")"}>Usuário: <strong>{me.name}</strong> · {me.login}</span><button className="button secondary" aria-label="Sair da sessão" onClick={logout}><LogOut size={16}/> Sair</button></div>
+          <div className="session-actions"><span title={me.name + " (" + me.login + ")"}>Usuário: <strong>{me.name}</strong> · {me.login}</span><button className="icon-button" aria-label="Trocar senha" title="Trocar senha" onClick={() => setModal({ kind: "password" })}><KeyRound size={17}/></button><button className="button secondary" aria-label="Sair da sessão" onClick={logout}><LogOut size={16}/> Sair</button></div>
           <span className="today">
             {new Intl.DateTimeFormat("pt-BR", {
               timeZone: "America/Sao_Paulo",
@@ -1072,7 +1062,7 @@ function App() {
         </main>
         <footer className="main-footer">
           <span>{identity.name} · Controle financeiro</span>
-          <span>Gestão dos recursos da igreja</span>
+          <span className="release-info">Versão {__APP_RELEASE__.version} · Atualizado em <time dateTime={__APP_RELEASE__.updatedAt}>{__APP_RELEASE__.updatedAt.split("-").reverse().join("/")}</time></span>
         </footer>
       </div>
       {toast && (

@@ -157,6 +157,7 @@ for (const viewport of [
   { width: 1280, height: 500 },
   { width: 1024, height: 600 },
   { width: 390, height: 600 },
+  { width: 320, height: 568 },
   { width: 844, height: 390 },
 ]) {
   test(`rolagem e sessão acessíveis em ${viewport.width}x${viewport.height}`, async ({
@@ -176,19 +177,34 @@ for (const viewport of [
     await expect
       .poll(async () => Math.round((await sidebar.boundingBox())!.x))
       .toBe(0);
-    expect(
-      await sidebar.evaluate((el) => el.scrollHeight > el.clientHeight),
-    ).toBeTruthy();
+    expect(await sidebar.evaluate((el) => getComputedStyle(el).overflowY)).toBe(
+      "auto",
+    );
     await sidebar.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await expect(sidebar.locator(".user-card")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Sair/ })).toHaveCount(1);
+    await expect(page.locator(".release-info")).toContainText(
+      "Versão 0.1.1 · Atualizado em 26/11/2026",
+    );
     await expect(
-      sidebar.getByRole("button", { name: "Sair", exact: true }),
-    ).toBeInViewport();
+      page.getByRole("button", { name: "Trocar senha", exact: true }),
+    ).toHaveCount(1);
     if (viewport.width === 390 || viewport.width === 1280)
       await page.screenshot({
         path: info.outputPath("sessao-e-rolagem.png"),
         fullPage: true,
       });
-    await sidebar.getByRole("button", { name: "Sair", exact: true }).click();
+    if (viewport.width <= 700) await go(page, "Usuários");
+    await page
+      .getByRole("button", { name: "Trocar senha", exact: true })
+      .click();
+    await expect(
+      page.getByRole("dialog", { name: "Trocar senha" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Fechar", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Sair da sessão", exact: true })
+      .click();
     await expect(
       page.getByRole("heading", { name: "Acesse seu financeiro" }),
     ).toBeVisible();

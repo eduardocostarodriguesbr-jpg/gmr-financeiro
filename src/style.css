@@ -1825,3 +1825,6 @@ textarea::placeholder {
 .topbar .mobile-menu { display: none; }
 @media(max-width: 700px) { .topbar .mobile-menu { display: inline-flex; } }
 .scope-notice { padding: 12px 16px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--hover); }
+.main-footer { flex-wrap: wrap; gap: 10px 20px; }
+.release-info { white-space: nowrap; }
+@media(max-width: 700px) { .session-actions { gap: 6px; } .session-actions > span { max-width: min(110px, 25vw); } }
